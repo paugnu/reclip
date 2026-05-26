@@ -1,6 +1,6 @@
 from unittest.mock import patch
 
-from app import parse_spotify_url, is_spotify_url, run_spotify_download, jobs
+from app import parse_spotify_url, is_spotify_url, run_spotify_download, run_download, jobs
 
 
 def test_spotify_track_url_detection():
@@ -34,24 +34,23 @@ def test_spotdl_missing(mock_which):
 
 
 @patch('app.shutil.which', return_value='/usr/bin/spotdl')
-@patch('app.glob.glob')
+@patch('app.os.listdir', return_value=['a.mp3'])
+@patch('app.os.makedirs')
 @patch('app.os.path.isfile', return_value=True)
 @patch('app.subprocess.run')
-def test_spotdl_success_single_file(mock_run, mock_isfile, mock_glob, mock_which):
+def test_spotdl_success_single_file(mock_run, mock_isfile, mock_makedirs, mock_listdir, mock_which):
     class Res:
         returncode = 0
         stdout = 'ok'
         stderr = ''
 
     mock_run.return_value = Res()
-    mock_glob.side_effect = [[], ['/tmp/a.mp3']]
-
     job_id = 'job-success'
     jobs[job_id] = {'status': 'queued'}
     run_spotify_download(job_id, 'https://open.spotify.com/track/123abc', {'type': 'track', 'id': '123abc'})
 
     assert jobs[job_id]['status'] == 'done'
-    assert jobs[job_id]['file'] == '/tmp/a.mp3'
+    assert jobs[job_id]['file'].endswith(f'/{job_id}/a.mp3')
 
 
 @patch('app.shutil.which', return_value='/usr/bin/spotdl')
@@ -71,22 +70,35 @@ def test_spotdl_error(mock_run, mock_which):
     assert jobs[job_id]['error'] == 'boom'
 
 
-@patch('app.shutil.which', return_value='/usr/bin/spotdl')
-@patch('app.glob.glob')
-@patch('app.os.path.isfile', return_value=True)
+def test_spotdl_album_rejected():
+    job_id = 'job-album'
+    jobs[job_id] = {'status': 'queued'}
+    run_spotify_download(job_id, 'https://open.spotify.com/album/123abc', {'type': 'album', 'id': '123abc'})
+    assert jobs[job_id]['status'] == 'error'
+    assert jobs[job_id]['error'] == 'Spotify albums and playlists are not supported yet. Please use a Spotify track URL.'
+
+
+def test_spotdl_playlist_rejected():
+    job_id = 'job-playlist'
+    jobs[job_id] = {'status': 'queued'}
+    run_spotify_download(job_id, 'https://open.spotify.com/playlist/123abc', {'type': 'playlist', 'id': '123abc'})
+    assert jobs[job_id]['status'] == 'error'
+    assert jobs[job_id]['error'] == 'Spotify albums and playlists are not supported yet. Please use a Spotify track URL.'
+
+
+@patch('app.run_spotify_download')
 @patch('app.subprocess.run')
-def test_spotdl_playlist_multiple_files(mock_run, mock_isfile, mock_glob, mock_which):
+def test_non_spotify_uses_ytdlp(mock_run, mock_spotify):
     class Res:
         returncode = 0
-        stdout = 'ok'
+        stdout = ''
         stderr = ''
 
     mock_run.return_value = Res()
-    mock_glob.side_effect = [[], ['/tmp/a.mp3', '/tmp/b.mp3']]
+    with patch('app.glob.glob', return_value=['/tmp/test.mp3']):
+        job_id = 'job-ytdlp'
+        jobs[job_id] = {'status': 'queued', 'title': 'test'}
+        run_download(job_id, 'https://youtube.com/watch?v=abc', 'audio', None)
 
-    job_id = 'job-multi'
-    jobs[job_id] = {'status': 'queued'}
-    run_spotify_download(job_id, 'https://open.spotify.com/playlist/123abc', {'type': 'playlist', 'id': '123abc'})
-
-    assert jobs[job_id]['status'] == 'done'
-    assert len(jobs[job_id]['files']) == 2
+    assert mock_spotify.call_count == 0
+    assert mock_run.call_args[0][0][0] == 'yt-dlp'

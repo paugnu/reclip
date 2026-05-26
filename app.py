@@ -104,13 +104,19 @@ def run_download(job_id, url, format_choice, format_id):
 def run_spotify_download(job_id, spotify_url, spotify_info):
     job = jobs[job_id]
     job["status"] = "resolving metadata"
+    if spotify_info["type"] in {"album", "playlist"}:
+        job["status"] = "error"
+        job["error"] = "Spotify albums and playlists are not supported yet. Please use a Spotify track URL."
+        return
+
     if shutil.which("spotdl") is None:
         job["status"] = "error"
         job["error"] = "Spotify support requires spotDL. Install it with: pip install spotdl"
         return
 
-    before = set(glob.glob(os.path.join(DOWNLOAD_DIR, "*")))
-    output_template = os.path.join(DOWNLOAD_DIR, "{artist} - {title}.{output-ext}")
+    job_dir = os.path.join(DOWNLOAD_DIR, job_id)
+    os.makedirs(job_dir, exist_ok=True)
+    output_template = os.path.join(job_dir, "{artist} - {title}.{output-ext}")
     cmd = [
         "spotdl",
         "download",
@@ -122,7 +128,7 @@ def run_spotify_download(job_id, spotify_url, spotify_info):
         "--restrict",
         "ascii",
     ]
-    timeout = 1200 if spotify_info["type"] in {"album", "playlist"} else 600
+    timeout = 600
     try:
         job["status"] = "matching audio"
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -131,20 +137,20 @@ def run_spotify_download(job_id, spotify_url, spotify_info):
             job["error"] = (result.stderr or result.stdout or "spotDL failed").strip().split("\n")[-1]
             return
 
-        after = set(glob.glob(os.path.join(DOWNLOAD_DIR, "*")))
-        new_files = sorted([f for f in (after - before) if os.path.isfile(f)])
+        new_files = []
+        for name in sorted(os.listdir(job_dir)):
+            path = os.path.join(job_dir, name)
+            if os.path.isfile(path):
+                new_files.append(path)
         if not new_files:
             job["status"] = "error"
             job["error"] = "spotDL completed but no files were produced"
             return
 
         job["status"] = "tagging metadata"
-        if len(new_files) == 1:
-            job["file"] = new_files[0]
-            job["filename"] = os.path.basename(new_files[0])
-        else:
-            job["files"] = new_files
-            job["filename"] = f"{spotify_info['type']}-{job_id} ({len(new_files)} tracks).txt"
+        chosen = new_files[0]
+        job["file"] = chosen
+        job["filename"] = os.path.basename(chosen)
         job["status"] = "done"
     except subprocess.TimeoutExpired:
         job["status"] = "error"
