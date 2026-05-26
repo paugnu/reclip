@@ -13,6 +13,7 @@ https://github.com/user-attachments/assets/419d3e50-c933-444b-8cab-a9724986ba05
 
 - Download videos from 1000+ supported sites (via [yt-dlp](https://github.com/yt-dlp/yt-dlp))
 - MP4 video or MP3 audio extraction
+- Spotify URL support via [spotDL](https://github.com/spotDL/spotify-downloader)
 - Quality/resolution picker
 - Bulk downloads — paste multiple URLs at once
 - Automatic URL deduplication
@@ -22,9 +23,10 @@ https://github.com/user-attachments/assets/419d3e50-c933-444b-8cab-a9724986ba05
 ## Quick Start
 
 ```bash
-brew install yt-dlp ffmpeg    # or apt install ffmpeg && pip install yt-dlp
+brew install yt-dlp ffmpeg    # or apt install ffmpeg
 git clone https://github.com/averygan/reclip.git
 cd reclip
+pip install -r requirements.txt
 ./reclip.sh
 ```
 
@@ -50,12 +52,28 @@ Anything [yt-dlp supports](https://github.com/yt-dlp/yt-dlp/blob/master/supporte
 
 YouTube, TikTok, Instagram, Twitter/X, Reddit, Facebook, Vimeo, Twitch, Dailymotion, SoundCloud, Loom, Streamable, Pinterest, Tumblr, Threads, LinkedIn, and many more.
 
+## Spotify Support
+
+Spotify links are supported through **spotDL**:
+
+- Spotify URLs are treated as metadata/source references.
+- Audio is matched from YouTube/YouTube Music by spotDL.
+- ReClip does **not** download protected Spotify audio directly.
+- Matching can occasionally be wrong because spotDL uses YouTube/YouTube Music audio sources.
+- `ffmpeg` is required.
+
+Install spotDL:
+
+```bash
+pip install spotdl
+```
+
 ## Stack
 
 - **Backend:** Python + Flask (~150 lines)
 - **Frontend:** Vanilla HTML/CSS/JS (single file, no build step)
-- **Download engine:** [yt-dlp](https://github.com/yt-dlp/yt-dlp) + [ffmpeg](https://ffmpeg.org/)
-- **Dependencies:** 2 (Flask, yt-dlp)
+- **Download engine:** [yt-dlp](https://github.com/yt-dlp/yt-dlp), [spotDL](https://github.com/spotDL/spotify-downloader), and [ffmpeg](https://ffmpeg.org/)
+- **Dependencies:** 3 (Flask, yt-dlp, spotdl)
 
 ## Disclaimer
 

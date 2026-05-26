@@ -389,6 +389,7 @@
 
     <textarea id="urls" placeholder="Paste one or more URLs..." rows="2"></textarea>
     <p class="hint">Multiple links? Separate with spaces, commas, or newlines.</p>
+    <p class="hint">Spotify links are supported through spotDL. Audio is matched from YouTube/YouTube Music and metadata comes from Spotify.</p>
 
     <div class="controls">
       <div class="pill-group">
@@ -486,6 +487,8 @@
               duration: data.duration,
               uploader: data.uploader || '',
               formats: data.formats || [],
+              source: data.source || 'yt-dlp',
+              mediaType: data.type || 'unknown',
               selectedFormatId: data.formats?.[0]?.id || null,
             };
           }
@@ -546,7 +549,8 @@
 
       // Ready / downloading / done / error states
       el.className = 'card';
-      const isAudio = currentFormat === 'audio';
+      const isSpotify = c.source === 'spotify';
+      const isAudio = currentFormat === 'audio' || isSpotify;
 
       let thumbHtml;
       if (isAudio) {
@@ -565,10 +569,15 @@
       }
 
       let actionHtml = '';
+      const spotifyNotice = isSpotify
+        ? `<div class="card-status" style="margin-bottom:6px;">Spotify audio is not downloaded directly. ReClip uses spotDL to find a matching audio source and apply Spotify metadata.</div>`
+        : '';
       if (c.status === 'ready') {
-        actionHtml = `<button class="card-dl-btn" onclick="dlCard(${idx})">Download</button>${qualityChips}`;
+        actionHtml = `${spotifyNotice}<button class="card-dl-btn" onclick="dlCard(${idx})">Download</button>${qualityChips}`;
       } else if (c.status === 'downloading') {
         actionHtml = `<span class="card-status downloading"><span class="spin"></span> Downloading...</span>`;
+      } else if (['queued', 'resolving metadata', 'matching audio', 'tagging metadata'].includes(c.status)) {
+        actionHtml = `<span class="card-status downloading"><span class="spin"></span> ${esc(c.status)}...</span>`;
       } else if (c.status === 'done') {
         actionHtml = `<button class="card-dl-btn done" onclick="saveCard(${idx})">Save</button>
           <span class="card-status done">${esc(c.filename || '')}</span>`;
@@ -605,7 +614,7 @@
 
     async function dlCard(idx) {
       const c = cardData[idx];
-      c.status = 'downloading';
+      c.status = c.source === 'spotify' ? 'resolving metadata' : 'downloading';
       c.error = null;
       renderCard(idx);
 
@@ -615,7 +624,7 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             url: c.url,
-            format: currentFormat,
+            format: c.source === 'spotify' ? 'audio' : currentFormat,
             format_id: c.selectedFormatId,
             title: c.title || '',
           }),
@@ -652,6 +661,9 @@
             clearInterval(iv);
             c.status = 'error';
             c.error = data.error;
+            renderCard(idx);
+          } else {
+            c.status = data.status || 'downloading';
             renderCard(idx);
           }
         } catch {

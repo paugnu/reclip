@@ -4,6 +4,8 @@ import glob
 import json
 import subprocess
 import threading
+import shutil
+from urllib.parse import urlparse
 from flask import Flask, request, jsonify, send_file, render_template
 
 app = Flask(__name__)
@@ -13,8 +15,34 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 jobs = {}
 
 
+def parse_spotify_url(url):
+    parsed = urlparse(url.strip())
+    if parsed.scheme not in {"http", "https"} or parsed.netloc != "open.spotify.com":
+        return None
+    parts = [p for p in parsed.path.split("/") if p]
+    if not parts:
+        return None
+    if parts[0].startswith("intl-"):
+        parts = parts[1:]
+    if len(parts) < 2:
+        return None
+    media_type = parts[0]
+    if media_type not in {"track", "album", "playlist"}:
+        return None
+    return {"type": media_type, "id": parts[1]}
+
+
+def is_spotify_url(url):
+    return parse_spotify_url(url) is not None
+
+
 def run_download(job_id, url, format_choice, format_id):
     job = jobs[job_id]
+    spotify_info = parse_spotify_url(url)
+    if spotify_info:
+        run_spotify_download(job_id, url, spotify_info)
+        return
+
     out_template = os.path.join(DOWNLOAD_DIR, f"{job_id}.%(ext)s")
 
     cmd = ["yt-dlp", "--no-playlist", "-o", out_template]
@@ -73,6 +101,59 @@ def run_download(job_id, url, format_choice, format_id):
         job["error"] = str(e)
 
 
+def run_spotify_download(job_id, spotify_url, spotify_info):
+    job = jobs[job_id]
+    job["status"] = "resolving metadata"
+    if shutil.which("spotdl") is None:
+        job["status"] = "error"
+        job["error"] = "Spotify support requires spotDL. Install it with: pip install spotdl"
+        return
+
+    before = set(glob.glob(os.path.join(DOWNLOAD_DIR, "*")))
+    output_template = os.path.join(DOWNLOAD_DIR, "{artist} - {title}.{output-ext}")
+    cmd = [
+        "spotdl",
+        "download",
+        spotify_url,
+        "--output",
+        output_template,
+        "--format",
+        "mp3",
+        "--restrict",
+        "ascii",
+    ]
+    timeout = 1200 if spotify_info["type"] in {"album", "playlist"} else 600
+    try:
+        job["status"] = "matching audio"
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        if result.returncode != 0:
+            job["status"] = "error"
+            job["error"] = (result.stderr or result.stdout or "spotDL failed").strip().split("\n")[-1]
+            return
+
+        after = set(glob.glob(os.path.join(DOWNLOAD_DIR, "*")))
+        new_files = sorted([f for f in (after - before) if os.path.isfile(f)])
+        if not new_files:
+            job["status"] = "error"
+            job["error"] = "spotDL completed but no files were produced"
+            return
+
+        job["status"] = "tagging metadata"
+        if len(new_files) == 1:
+            job["file"] = new_files[0]
+            job["filename"] = os.path.basename(new_files[0])
+        else:
+            job["files"] = new_files
+            job["filename"] = f"{spotify_info['type']}-{job_id} ({len(new_files)} tracks).txt"
+        job["status"] = "done"
+    except subprocess.TimeoutExpired:
+        job["status"] = "error"
+        job["error"] = "Spotify download timed out"
+    except Exception as e:
+        job["status"] = "error"
+        job["error"] = str(e)
+
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -84,6 +165,19 @@ def get_info():
     url = data.get("url", "").strip()
     if not url:
         return jsonify({"error": "No URL provided"}), 400
+
+    spotify_info = parse_spotify_url(url)
+    if spotify_info:
+        return jsonify({
+            "id": spotify_info["id"],
+            "original_url": url,
+            "source": "spotify",
+            "type": spotify_info["type"],
+            "title": f"Spotify {spotify_info['type']}",
+            "thumbnail": None,
+            "formats": [],
+            "available_output_formats": ["mp3"],
+        })
 
     cmd = ["yt-dlp", "--no-playlist", "-j", url]
     try:
@@ -112,6 +206,7 @@ def get_info():
         formats.sort(key=lambda x: x["height"], reverse=True)
 
         return jsonify({
+            "source": "yt-dlp",
             "title": info.get("title", ""),
             "thumbnail": info.get("thumbnail", ""),
             "duration": info.get("duration"),
@@ -136,7 +231,7 @@ def start_download():
         return jsonify({"error": "No URL provided"}), 400
 
     job_id = uuid.uuid4().hex[:10]
-    jobs[job_id] = {"status": "downloading", "url": url, "title": title}
+    jobs[job_id] = {"status": "queued", "url": url, "title": title}
 
     thread = threading.Thread(target=run_download, args=(job_id, url, format_choice, format_id))
     thread.daemon = True
@@ -162,6 +257,8 @@ def download_file(job_id):
     job = jobs.get(job_id)
     if not job or job["status"] != "done":
         return jsonify({"error": "File not ready"}), 404
+    if job.get("files"):
+        return jsonify({"error": "Multiple files created; single-file download is not available yet for this Spotify URL type"}), 400
     return send_file(job["file"], as_attachment=True, download_name=job["filename"])
 
 
